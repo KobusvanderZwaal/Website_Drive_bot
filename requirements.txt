@@ -1,2 +1,4 @@
-python-telegram-bot==20.8
+python-telegram-bot[job-queue]==20.8
 requests==2.31.0
+anthropic
+pytz
