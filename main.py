@@ -52,8 +52,6 @@ TZ = pytz.timezone('Europe/Amsterdam')
 
 VALID_DECADES = ['60s', '70s', '80s', '90s', '00s', '10s', '20s']
 
-claude = anthropic.Anthropic()
-
 
 # ── GitHub hulpfuncties ────────────────────────────────────────────────────────
 
@@ -236,12 +234,17 @@ def claude_edit(stripped_html, changes):
             line += f"\n   [Bijbehorende foto staat in de repo op: {c['foto']}]"
         requests_text.append(line)
 
-    response = claude.messages.create(
+    client = anthropic.Anthropic()  # leest ANTHROPIC_API_KEY op aanroep-moment
+    response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=16000,
-        thinking={"type": "adaptive"},
-        output_config={"format": {"type": "json_schema", "schema": EDIT_SCHEMA}},
         system=CLAUDE_SYSTEM,
+        tools=[{
+            "name": "html_edits",
+            "description": "Geef de HTML-bewerkingen terug als zoek/vervang-paren",
+            "input_schema": EDIT_SCHEMA,
+        }],
+        tool_choice={"type": "tool", "name": "html_edits"},
         messages=[{
             "role": "user",
             "content": (
@@ -252,8 +255,8 @@ def claude_edit(stripped_html, changes):
             ),
         }],
     )
-    text = next(b.text for b in response.content if b.type == "text")
-    return json.loads(text)
+    tool_use = next(b for b in response.content if b.type == "tool_use")
+    return tool_use.input
 
 
 def apply_edits(html, edits):
