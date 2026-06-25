@@ -503,15 +503,16 @@ def main():
     app.add_handler(CommandHandler('verwijderen', cmd_verwijderen))
 
     # Vrije tekst: privéchat én de bandgroep
-    group_filter = (
-        filters.Chat(chat_id=int(GROUP_CHAT_ID)) if GROUP_CHAT_ID else filters.NEVER
-    )
+    chat_filter = filters.ChatType.PRIVATE
+    if GROUP_CHAT_ID:
+        chat_filter = chat_filter | filters.Chat(chat_id=int(GROUP_CHAT_ID))
+
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & (filters.ChatType.PRIVATE | group_filter),
+        filters.TEXT & ~filters.COMMAND & chat_filter,
         vrije_tekst
     ))
     app.add_handler(MessageHandler(
-        filters.PHOTO & (filters.ChatType.PRIVATE | group_filter),
+        filters.PHOTO & chat_filter,
         foto_handler
     ))
 
