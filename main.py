@@ -6,6 +6,9 @@ Hiermee kunnen bandleden de setlist en de rest van de website aanpassen via Tele
 Setlist-commando's (/toevoegen, /verwijderen) werken direct.
 Vrije-tekst wijzigingen en foto's worden nu OOK direct verwerkt door Claude
 en meteen op de website gezet — geen wachtrij meer.
+
+Werkt in een privéchat met de bot én in de bandgroep (GROUP_CHAT_ID). In de
+bandgroep mag iedereen wijzigingen insturen; in privé alleen ALLOWED_USERS.
 """
 
 import os
@@ -29,20 +32,20 @@ logger = logging.getLogger(__name__)
 
 # ── Config uit omgevingsvariabelen ─────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
-GITHUB_TOKEN   = os.environ['GITHUB_TOKEN']
-ALLOWED_USERS  = set(
+GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
+ALLOWED_USERS = set(
     int(x.strip()) for x in os.environ.get('ALLOWED_USERS', '').split(',') if x.strip()
 )
-GROUP_CHAT_ID  = os.environ.get('GROUP_CHAT_ID', '').strip()
-CLAUDE_MODEL   = os.environ.get('CLAUDE_MODEL', 'claude-opus-4-8')
+GROUP_CHAT_ID = os.environ.get('GROUP_CHAT_ID', '').strip()
+CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-opus-4-8')
 
 REPO_OWNER = 'KobusvanderZwaal'
-REPO_NAME  = 'Website_Drive'
-BOT_REPO   = 'Website_Drive_bot'
-FILE_PATH  = 'index.html'
-BRANCH     = 'main'
+REPO_NAME = 'Website_Drive'
+BOT_REPO = 'Website_Drive_bot'
+FILE_PATH = 'index.html'
+BRANCH = 'main'
 
-API        = 'https://api.github.com'
+API = 'https://api.github.com'
 GH_HEADERS = {
     'Authorization': f'token {GITHUB_TOKEN}',
     'Accept': 'application/vnd.github.v3+json'
@@ -51,6 +54,21 @@ GH_HEADERS = {
 TZ = pytz.timezone('Europe/Amsterdam')
 
 VALID_DECADES = ['60s', '70s', '80s', '90s', '00s', '10s', '20s']
+
+
+# ── Toegang ────────────────────────────────────────────────────────────────────
+
+def is_group_chat(update: Update) -> bool:
+    """True als het bericht uit de geconfigureerde bandgroep komt."""
+    return bool(GROUP_CHAT_ID) and str(update.effective_chat.id) == str(GROUP_CHAT_ID)
+
+
+def is_allowed(update: Update) -> bool:
+    """In de bandgroep mag iedereen; in privéchat alleen ALLOWED_USERS."""
+    if is_group_chat(update):
+        return True
+    user = update.effective_user
+    return bool(user) and user.id in ALLOWED_USERS
 
 
 # ── GitHub hulpfuncties ────────────────────────────────────────────────────────
@@ -64,7 +82,7 @@ def get_html():
 
 def commit_files(files, commit_msg):
     """Commit één of meer bestanden (pad -> bytes) via de Git Data API."""
-    ref_url  = f'{API}/repos/{REPO_OWNER}/{REPO_NAME}/git/refs/heads/{BRANCH}'
+    ref_url = f'{API}/repos/{REPO_OWNER}/{REPO_NAME}/git/refs/heads/{BRANCH}'
     ref_data = requests.get(ref_url, headers=GH_HEADERS, timeout=30)
     ref_data.raise_for_status()
     latest_sha = ref_data.json()['object']['sha']
@@ -211,14 +229,14 @@ EDIT_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "zoek":    {"type": "string"},
+                    "zoek": {"type": "string"},
                     "vervang": {"type": "string"},
                 },
                 "required": ["zoek", "vervang"],
                 "additionalProperties": False,
             },
         },
-        "samenvatting":    {"type": "string"},
+        "samenvatting": {"type": "string"},
         "niet_uitgevoerd": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["edits", "samenvatting", "niet_uitgevoerd"],
@@ -326,12 +344,12 @@ async def verwerk_direct(update: Update, naam: str, verzoek: str, foto_pad: str 
 # ── Telegram handlers ──────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid  = update.effective_user.id
+    uid = update.effective_user.id
     name = update.effective_user.first_name
     await update.message.reply_text(
         f"Hoi {name}! \U0001f3b8\n\n"
         f"Jouw Telegram ID: {uid}\n\n"
-        f"Stuur dit nummer naar Kobus om toegang te krijgen.\n\n"
+        f"In de bandgroep kan iedereen meteen aan de slag.\n\n"
         f"Setlist (direct live):\n"
         f"/setlist – toon de setlist\n"
         f"/toevoegen Artiest | Titel | Decennium\n"
@@ -368,7 +386,7 @@ async def cmd_chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_setlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
+    if not is_allowed(update):
         await update.message.reply_text(f"Geen toegang. Jouw ID: {update.effective_user.id}")
         return
     msg = await update.message.reply_text("Setlist ophalen… ⏳")
@@ -383,10 +401,10 @@ async def cmd_setlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_toevoegen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
+    if not is_allowed(update):
         await update.message.reply_text(f"Geen toegang. Jouw ID: {update.effective_user.id}")
         return
-    raw   = ' '.join(context.args) if context.args else ''
+    raw = ' '.join(context.args) if context.args else ''
     parts = [p.strip() for p in raw.split('|')]
     if len(parts) != 3:
         await update.message.reply_text(
@@ -401,9 +419,9 @@ async def cmd_toevoegen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text(f"Toevoegen: {title} – {artist}… ⏳")
     try:
-        html     = await asyncio.to_thread(get_html)
+        html = await asyncio.to_thread(get_html)
         new_html = add_song(html, artist, title, decade)
-        count    = song_count(new_html)
+        count = song_count(new_html)
         await asyncio.to_thread(commit_html, new_html, f"Bot: voeg '{title}' ({artist}) toe")
         await msg.edit_text(
             f"✅ {title} – {artist} toegevoegd!\n"
@@ -415,7 +433,7 @@ async def cmd_toevoegen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_verwijderen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
+    if not is_allowed(update):
         await update.message.reply_text(f"Geen toegang. Jouw ID: {update.effective_user.id}")
         return
     title = ' '.join(context.args).strip() if context.args else ''
@@ -427,8 +445,8 @@ async def cmd_verwijderen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text(f"Verwijderen: {title}… ⏳")
     try:
-        html             = await asyncio.to_thread(get_html)
-        new_html, count  = remove_song(html, title)
+        html = await asyncio.to_thread(get_html)
+        new_html, count = remove_song(html, title)
         if new_html is None:
             await msg.edit_text(
                 f"❌ '{title}' niet gevonden.\n"
@@ -447,7 +465,7 @@ async def cmd_verwijderen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def vrije_tekst(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Vrije tekst (privé of groep) = directe wijziging van de website via Claude."""
-    if update.effective_user.id not in ALLOWED_USERS:
+    if not is_allowed(update):
         # In privéchat feedback geven; in groep stilletjes negeren
         if update.effective_chat.type == 'private':
             await update.message.reply_text(
@@ -457,13 +475,13 @@ async def vrije_tekst(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     tekst = update.message.text.strip()
-    naam  = update.effective_user.first_name
+    naam = update.effective_user.first_name
     await verwerk_direct(update, naam, tekst)
 
 
 async def foto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Foto met bijschrift: direct opslaan en op de site zetten."""
-    if update.effective_user.id not in ALLOWED_USERS:
+    if not is_allowed(update):
         if update.effective_chat.type == 'private':
             await update.message.reply_text(f"Geen toegang. Jouw ID: {update.effective_user.id}")
         return
@@ -478,11 +496,11 @@ async def foto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("Foto opslaan… ⏳")
     try:
-        photo   = update.message.photo[-1]
+        photo = update.message.photo[-1]
         tg_file = await context.bot.get_file(photo.file_id)
-        data    = bytes(await tg_file.download_as_bytearray())
+        data = bytes(await tg_file.download_as_bytearray())
 
-        ts   = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
+        ts = datetime.datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
         path = f'images/foto_{ts}.jpg'
         naam = update.effective_user.first_name
         await asyncio.to_thread(commit_files, {path: data}, f"Bot: upload {path}")
@@ -495,11 +513,11 @@ async def foto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler('start',       cmd_start))
-    app.add_handler(CommandHandler('help',        cmd_help))
-    app.add_handler(CommandHandler('chatid',      cmd_chatid))
-    app.add_handler(CommandHandler('setlist',     cmd_setlist))
-    app.add_handler(CommandHandler('toevoegen',   cmd_toevoegen))
+    app.add_handler(CommandHandler('start', cmd_start))
+    app.add_handler(CommandHandler('help', cmd_help))
+    app.add_handler(CommandHandler('chatid', cmd_chatid))
+    app.add_handler(CommandHandler('setlist', cmd_setlist))
+    app.add_handler(CommandHandler('toevoegen', cmd_toevoegen))
     app.add_handler(CommandHandler('verwijderen', cmd_verwijderen))
 
     # Vrije tekst: privéchat én de bandgroep
